@@ -4,7 +4,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { install, installAsync, installBatchAsync, cleanup } = require('./lib/installer');
+const { install, installAsync, installBatchAsync, cleanup, extractPkgName } = require('./lib/installer');
 const { bundlePackage, bundleEntry } = require('./lib/bundler');
 const { measure } = require('./lib/sizer');
 const { format, formatTable, formatJson, formatDiff, formatDepBreakdown, formatEntry } = require('./lib/formatter');
@@ -73,6 +73,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--entry') args.flags.entry = argv[++i];
     else if (argv[i] === '--concurrency') args.flags.concurrency = parseInt(argv[++i], 10);
     else if (argv[i] === '--local') args.flags.local = true;
+    else if (argv[i] === '--force') args.flags.force = true;
     else args.positional.push(argv[i]);
   }
   return args;
@@ -139,9 +140,9 @@ function parsePackageSpec(raw) {
   return { name, version, spec: version === 'latest' ? name : `${name}@${version}` };
 }
 
-async function analyzeOne(spec) {
+async function analyzeOne(spec, flags = {}) {
   const { name } = parsePackageSpec(spec);
-  const installResult = await installAsync(spec);
+  const installResult = await installAsync(spec, { force: flags.force });
   try {
     const { pkgDir, packageJson: pkg } = installResult;
     const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
@@ -240,7 +241,7 @@ async function scanLocalDeps(dir, flags) {
       const onProgress = isQuiet ? undefined : (count) => {
         spinner.update(`Installing packages... (${count}/${deps.length})`);
       };
-      batchResult = await installBatchAsync(deps, onProgress);
+      batchResult = await installBatchAsync(deps, onProgress, { force: flags.force });
     } catch (err) {
       if (!isQuiet) spinner.done(`Install failed`);
       console.error(`Error: ${err.message}`);
@@ -326,6 +327,7 @@ async function scanLocalDeps(dir, flags) {
 }
 
 function isPath(arg) {
+  if (arg.startsWith('@') && !arg.startsWith('@/')) return false;
   return arg.startsWith('.') || arg.startsWith('/') || arg.includes(path.sep);
 }
 
@@ -348,8 +350,8 @@ async function runDiff(positional, flags) {
   }
 
   const [resultA, resultB] = await Promise.all([
-    analyzeOne(specA),
-    analyzeOne(specB),
+    analyzeOne(specA, flags),
+    analyzeOne(specB, flags),
   ]);
 
   if (flags.json) {
@@ -383,7 +385,7 @@ async function runDeps(spec, flags) {
   }
 
   const { name } = parsePackageSpec(spec);
-  const installResult = await installAsync(spec);
+  const installResult = await installAsync(spec, { force: flags.force });
   try {
     const { pkgDir, packageJson: pkg } = installResult;
     const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
@@ -416,7 +418,7 @@ async function runDeps(spec, flags) {
 
     let batchResult;
     try {
-      batchResult = await installBatchAsync(deps);
+      batchResult = await installBatchAsync(deps, undefined, { force: flags.force });
     } catch {
       // Fall back to empty results if batch install fails
       batchResult = { tmpDir: null, results: {} };
@@ -531,7 +533,7 @@ async function runSinglePackage(spec, flags) {
       process.stdout.write(`\nAnalyzing ${spec}...\n`);
     }
 
-    const installResult = install(spec);
+    const installResult = install(spec, { force: flags.force });
     tmpDir = installResult.tmpDir;
     const { pkgDir, packageJson: pkg } = installResult;
 
@@ -597,6 +599,7 @@ ${bold}OPTIONS${reset}
   ${green}--entry ${dim}<path>${reset}      Analyze local file/directory (skips npm install)
   ${green}--local${reset}             Use project's node_modules instead of installing to temp dir
                       ${dim}(sizes may differ slightly from fresh install due to resolved versions)${reset}
+  ${green}--force${reset}             Pass --force to npm install (bypass peer dep conflicts)
   ${green}--concurrency ${dim}<N>${reset}  Max parallel analyses (default: CPU count, max 8)
   ${green}-h, --help${reset}          Show this help message
 
@@ -629,7 +632,7 @@ async function runMultiplePackages(specs, flags) {
     const onProgress = isQuiet ? undefined : (count) => {
       spinner.update(`Installing packages... (${count}/${specs.length})`);
     };
-    batchResult = await installBatchAsync(specs, onProgress);
+    batchResult = await installBatchAsync(specs, onProgress, { force: flags.force });
   } catch (err) {
     if (!isQuiet) spinner.done(`Install failed`);
     console.error(`Error: ${err.message}`);
@@ -647,7 +650,7 @@ async function runMultiplePackages(specs, flags) {
   let failCount = 0;
 
   const tasks = specs.map(spec => async () => {
-    const installed = batchResult.results[spec];
+    const installed = batchResult.results[extractPkgName(spec)];
     if (!installed) {
       done++;
       failCount++;

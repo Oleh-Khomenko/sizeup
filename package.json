@@ -1,6 +1,6 @@
 {
   "name": "sizeup",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Fast CLI tool to analyze npm package bundle sizes",
   "bin": {
     "sizeup": "./index.js"
