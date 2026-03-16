@@ -4,7 +4,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { install, installAsync, installBatchAsync, cleanup, extractPkgName } = require('./lib/installer');
+const { installAsync, installBatchAsync, cleanup, extractPkgName } = require('./lib/installer');
 const { bundlePackage, bundleEntry } = require('./lib/bundler');
 const { measure } = require('./lib/sizer');
 const { format, formatTable, formatJson, formatDiff, formatDepBreakdown, formatEntry } = require('./lib/formatter');
@@ -74,6 +74,8 @@ function parseArgs(argv) {
     else if (argv[i] === '--concurrency') args.flags.concurrency = parseInt(argv[++i], 10);
     else if (argv[i] === '--local') args.flags.local = true;
     else if (argv[i] === '--force') args.flags.force = true;
+    else if (argv[i] === '--gzip-level') args.flags.gzipLevel = parseInt(argv[++i], 10);
+    else if (argv[i] === '--brotli') args.flags.brotli = true;
     else args.positional.push(argv[i]);
   }
   return args;
@@ -85,8 +87,8 @@ function parseBudget(str) {
   const num = parseFloat(match[1]);
   const unit = match[2].toUpperCase();
   if (unit === 'B') return num;
-  if (unit === 'KB') return num * 1024;
-  if (unit === 'MB') return num * 1024 * 1024;
+  if (unit === 'KB') return num * 1000;
+  if (unit === 'MB') return num * 1000 * 1000;
   return num;
 }
 
@@ -103,10 +105,22 @@ function checkBudget(results, budgetStr, jsonMode) {
 
   if (jsonMode) return { budgetResults, failed };
 
-  for (const b of budgetResults) {
-    const icon = b.pass ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-    const status = b.pass ? 'PASS' : 'FAIL';
-    process.stdout.write(`  ${icon} ${status}: ${b.name} (${formatSizeInline(b.gzipped)} / ${formatSizeInline(b.budget)})\n`);
+  const passing = budgetResults.filter(b => b.pass);
+  const failing = budgetResults.filter(b => !b.pass);
+
+  if (passing.length > 0) {
+    process.stdout.write(`  \x1b[32mPASS (${passing.length})\x1b[0m\n`);
+    for (const b of passing) {
+      process.stdout.write(`  \x1b[32m✓\x1b[0m ${b.name} (${formatSizeInline(b.gzipped)} / ${formatSizeInline(b.budget)})\n`);
+    }
+  }
+
+  if (failing.length > 0) {
+    if (passing.length > 0) process.stdout.write('\n');
+    process.stdout.write(`  \x1b[31mFAIL (${failing.length})\x1b[0m\n`);
+    for (const b of failing) {
+      process.stdout.write(`  \x1b[31m✗\x1b[0m ${b.name} (${formatSizeInline(b.gzipped)} / ${formatSizeInline(b.budget)})\n`);
+    }
   }
 
   if (failed) process.exitCode = 1;
@@ -146,7 +160,7 @@ async function analyzeOne(spec, flags = {}) {
   try {
     const { pkgDir, packageJson: pkg } = installResult;
     const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
-    const sizes = measure(raw, minified);
+    const sizes = measure(raw, minified, flags.gzipLevel, { brotli: flags.brotli });
     const deps = pkg.dependencies ? Object.keys(pkg.dependencies) : [];
     const treeshake = !!(pkg.module || pkg.exports || pkg.sideEffects === false);
 
@@ -163,9 +177,9 @@ async function analyzeOne(spec, flags = {}) {
   }
 }
 
-async function analyzeFromInstalled(pkgDir, pkg, name) {
+async function analyzeFromInstalled(pkgDir, pkg, name, flags = {}) {
   const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
-  const sizes = measure(raw, minified);
+  const sizes = measure(raw, minified, flags.gzipLevel, { brotli: flags.brotli });
   const deps = pkg.dependencies ? Object.keys(pkg.dependencies) : [];
   const treeshake = !!(pkg.module || pkg.exports || pkg.sideEffects === false);
 
@@ -200,7 +214,13 @@ async function scanLocalDeps(dir, flags) {
     process.exit(1);
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  } catch (e) {
+    console.error(`Error: Failed to parse package.json in ${dir}: ${e.message}`);
+    process.exit(1);
+  }
   const deps = pkg.dependencies ? Object.keys(pkg.dependencies) : [];
 
   if (deps.length === 0) {
@@ -225,6 +245,7 @@ async function scanLocalDeps(dir, flags) {
     const results = {};
     for (const dep of deps) {
       const pkgDir = path.join(nodeModulesDir, dep);
+      if (!pkgDir.startsWith(nodeModulesDir + path.sep)) continue;
       const pkgJsonPath = path.join(pkgDir, 'package.json');
       if (fs.existsSync(pkgJsonPath)) {
         try {
@@ -256,38 +277,40 @@ async function scanLocalDeps(dir, flags) {
 
   const concurrency = Math.min(flags.concurrency || os.cpus().length, 8);
   const total = deps.length;
+  let started = 0;
   let done = 0;
   let failCount = 0;
 
   const tasks = deps.map(dep => async () => {
     const installed = batchResult.results[dep];
     if (!installed) {
-      done++;
+      const num = ++done;
       failCount++;
       if (!isQuiet) {
-        spinner.log(`  \x1b[31m✗\x1b[0m [${done}/${total}] Failed: ${dep} - not found ${flags.local ? 'in node_modules' : 'after batch install'}`);
+        spinner.log(`  \x1b[31m✗\x1b[0m [${num}/${total}] Failed: ${dep} - not found ${flags.local ? 'in node_modules' : 'after batch install'}`);
       }
       return null;
     }
     try {
+      const buildNum = ++started;
       if (!isQuiet) {
-        spinner.update(`[${done}/${total}] Building ${dep}...`);
+        spinner.update(`[${buildNum}/${total}] Building ${dep}...`);
       }
-      const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, dep);
-      done++;
+      const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, dep, flags);
+      const num = ++done;
       if (!isQuiet) {
         if (!spinner._isTTY) {
-          spinner.log(`  [${done}/${total}] Done: ${result.name} (gzipped: ${formatSizeInline(result.sizes.gzipped)})`);
+          spinner.log(`  [${num}/${total}] Done: ${result.name} (gzipped: ${formatSizeInline(result.sizes.gzipped)})`);
         } else {
-          spinner.update(`[${done}/${total}] Building next...`);
+          spinner.update(`[${num}/${total}] Building next...`);
         }
       }
       return result;
     } catch (err) {
-      done++;
+      const num = ++done;
       failCount++;
       if (!isQuiet) {
-        spinner.log(`  \x1b[31m✗\x1b[0m [${done}/${total}] Failed: ${dep} - ${err.message}`);
+        spinner.log(`  \x1b[31m✗\x1b[0m [${num}/${total}] Failed: ${dep} - ${err.message}`);
       }
       return null;
     }
@@ -332,9 +355,9 @@ function isPath(arg) {
 }
 
 function formatSizeInline(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' kB';
-  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  if (bytes < 1000) return bytes + ' B';
+  if (bytes < 1000 * 1000) return (bytes / 1000).toFixed(1) + ' kB';
+  return (bytes / (1000 * 1000)).toFixed(2) + ' MB';
 }
 
 async function runDiff(positional, flags) {
@@ -389,7 +412,7 @@ async function runDeps(spec, flags) {
   try {
     const { pkgDir, packageJson: pkg } = installResult;
     const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
-    const sizes = measure(raw, minified);
+    const sizes = measure(raw, minified, flags.gzipLevel, { brotli: flags.brotli });
     const deps = pkg.dependencies ? Object.keys(pkg.dependencies) : [];
     const treeshake = !!(pkg.module || pkg.exports || pkg.sideEffects === false);
 
@@ -430,7 +453,7 @@ async function runDeps(spec, flags) {
         const installed = batchResult.results[dep];
         if (!installed) continue;
         try {
-          const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, dep);
+          const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, dep, flags);
           if (!flags.json) {
             process.stdout.write(`  Done: ${result.name}\n`);
           }
@@ -487,10 +510,20 @@ async function runEntry(entryPath, flags) {
 
   if (isDir) {
     const pkgPath = path.join(resolved, 'package.json');
-    const pkg = fs.existsSync(pkgPath)
-      ? JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-      : { main: 'index.js' };
-    const entry = pkg.main ? path.resolve(resolved, pkg.main) : path.join(resolved, 'index.js');
+    let pkg = { main: 'index.js' };
+    if (fs.existsSync(pkgPath)) {
+      try {
+        pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      } catch (e) {
+        console.error(`Error: Failed to parse package.json: ${e.message}`);
+        process.exit(1);
+      }
+    }
+    let entry = pkg.main ? path.resolve(resolved, pkg.main) : path.join(resolved, 'index.js');
+    if (!entry.startsWith(resolved + path.sep) && entry !== resolved) {
+      console.error(`Error: pkg.main escapes package directory: ${pkg.main}`);
+      process.exit(1);
+    }
     const { raw, minified, fileCount, externals } = await bundleEntry(entry);
     await outputEntryResult(raw, minified, fileCount, externals, resolved, flags);
   } else {
@@ -500,7 +533,7 @@ async function runEntry(entryPath, flags) {
 }
 
 async function outputEntryResult(raw, minified, fileCount, externals, entryLabel, flags) {
-  const sizes = measure(raw, minified);
+  const sizes = measure(raw, minified, flags.gzipLevel, { brotli: flags.brotli });
 
   const result = {
     entry: entryLabel,
@@ -533,12 +566,12 @@ async function runSinglePackage(spec, flags) {
       process.stdout.write(`\nAnalyzing ${spec}...\n`);
     }
 
-    const installResult = install(spec, { force: flags.force });
+    const installResult = await installAsync(spec, { force: flags.force });
     tmpDir = installResult.tmpDir;
     const { pkgDir, packageJson: pkg } = installResult;
 
     const { raw, minified, fileCount } = await bundlePackage(pkgDir, pkg);
-    const sizes = measure(raw, minified);
+    const sizes = measure(raw, minified, flags.gzipLevel, { brotli: flags.brotli });
 
     const deps = pkg.dependencies ? Object.keys(pkg.dependencies) : [];
     const treeshake = !!(pkg.module || pkg.exports || pkg.sideEffects === false);
@@ -600,6 +633,8 @@ ${bold}OPTIONS${reset}
   ${green}--local${reset}             Use project's node_modules instead of installing to temp dir
                       ${dim}(sizes may differ slightly from fresh install due to resolved versions)${reset}
   ${green}--force${reset}             Pass --force to npm install (bypass peer dep conflicts)
+  ${green}--brotli${reset}            Show Brotli compressed size alongside Gzip
+  ${green}--gzip-level ${dim}<N>${reset}   Gzip compression level 1-9 (default: 9)
   ${green}--concurrency ${dim}<N>${reset}  Max parallel analyses (default: CPU count, max 8)
   ${green}-h, --help${reset}          Show this help message
 
@@ -646,38 +681,40 @@ async function runMultiplePackages(specs, flags) {
 
   const concurrency = Math.min(flags.concurrency || os.cpus().length, 8);
   const total = specs.length;
+  let started = 0;
   let done = 0;
   let failCount = 0;
 
   const tasks = specs.map(spec => async () => {
     const installed = batchResult.results[extractPkgName(spec)];
     if (!installed) {
-      done++;
+      const num = ++done;
       failCount++;
       if (!isQuiet) {
-        spinner.log(`  \x1b[31m✗\x1b[0m [${done}/${total}] Failed: ${spec} - not found after install`);
+        spinner.log(`  \x1b[31m✗\x1b[0m [${num}/${total}] Failed: ${spec} - not found after install`);
       }
       return null;
     }
     try {
+      const buildNum = ++started;
       if (!isQuiet) {
-        spinner.update(`[${done}/${total}] Building ${spec}...`);
+        spinner.update(`[${buildNum}/${total}] Building ${spec}...`);
       }
-      const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, spec);
-      done++;
+      const result = await analyzeFromInstalled(installed.pkgDir, installed.packageJson, spec, flags);
+      const num = ++done;
       if (!isQuiet) {
         if (!spinner._isTTY) {
-          spinner.log(`  [${done}/${total}] Done: ${result.name} (gzipped: ${formatSizeInline(result.sizes.gzipped)})`);
+          spinner.log(`  [${num}/${total}] Done: ${result.name} (gzipped: ${formatSizeInline(result.sizes.gzipped)})`);
         } else {
-          spinner.update(`[${done}/${total}] Building next...`);
+          spinner.update(`[${num}/${total}] Building next...`);
         }
       }
       return result;
     } catch (err) {
-      done++;
+      const num = ++done;
       failCount++;
       if (!isQuiet) {
-        spinner.log(`  \x1b[31m✗\x1b[0m [${done}/${total}] Failed: ${spec} - ${err.message}`);
+        spinner.log(`  \x1b[31m✗\x1b[0m [${num}/${total}] Failed: ${spec} - ${err.message}`);
       }
       return null;
     }
