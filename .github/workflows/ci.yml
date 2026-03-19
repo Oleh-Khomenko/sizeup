@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm install
+
+      - run: npm test
+
+  self-analyze:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - name: Analyze own dependencies
+        run: node index.js . --json
+
+      - name: Single package check
+        run: node index.js is-number
+
+      - name: Diff check
+        run: node index.js --diff is-number@7.0.0 is-number@7.0.0 --json
+
+      - name: Entry check
+        run: node index.js --entry ./lib/api.js --json
+
+      - name: Budget check (should pass)
+        run: node index.js is-number --budget 50kB
+
+      - name: Deps breakdown
+        run: node index.js is-odd --deps --json
