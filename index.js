@@ -53,7 +53,7 @@ async function analyzePool(items, batchResult, flags, spinner, isQuiet) {
         if (!spinner._isTTY) {
           spinner.log(`  [${num}/${total}] Done: ${result.name} (gzipped: ${formatSize(result.sizes.gzipped)})`);
         } else {
-          spinner.update(`[${num}/${total}] Building next...`);
+          spinner.update(`[${num}/${total}] Done: ${result.name}`);
         }
       }
       return result;

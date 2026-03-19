@@ -11,6 +11,7 @@ npm install -g sizeup
 ## Usage
 
 ```
+sizeup                        Scan all deps in cwd's package.json
 sizeup <package...>           Analyze one or more packages
 sizeup [path]                 Scan all deps in package.json
 sizeup --diff <a> <b>         Compare two package versions
