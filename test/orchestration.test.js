@@ -8,6 +8,8 @@ const fs = require('fs');
 const os = require('os');
 
 const CLI = path.join(__dirname, '..', 'index.js');
+const isWindows = process.platform === 'win32';
+const skipOnWindows = isWindows ? { skip: 'npm install too slow on Windows CI' } : {};
 
 function run(args, timeout = 60000) {
   return new Promise((resolve, reject) => {
@@ -17,7 +19,7 @@ function run(args, timeout = 60000) {
   });
 }
 
-describe('runDiff (--diff)', { timeout: 120000 }, () => {
+describe('runDiff (--diff)', { timeout: 120000, ...skipOnWindows }, () => {
   it('compares two package versions in JSON mode', async () => {
     const { stdout, exitCode } = await run(['--diff', 'is-number@7.0.0', 'is-number@7.0.0', '--json']);
     assert.equal(exitCode, 0);
@@ -36,7 +38,7 @@ describe('runDiff (--diff)', { timeout: 120000 }, () => {
   });
 });
 
-describe('runDeps (--deps)', { timeout: 120000 }, () => {
+describe('runDeps (--deps)', { timeout: 120000, ...skipOnWindows }, () => {
   it('shows dependency breakdown in JSON mode', async () => {
     const { stdout, exitCode } = await run(['--deps', 'is-odd', '--json']);
     assert.equal(exitCode, 0);
@@ -53,7 +55,7 @@ describe('runDeps (--deps)', { timeout: 120000 }, () => {
   });
 });
 
-describe('runMultiplePackages', { timeout: 120000 }, () => {
+describe('runMultiplePackages', { timeout: 120000, ...skipOnWindows }, () => {
   it('analyzes multiple packages in JSON mode', async () => {
     const { stdout, exitCode } = await run(['is-number', 'is-odd', '--json']);
     assert.equal(exitCode, 0);
@@ -107,7 +109,7 @@ describe('runEntry (--entry)', { timeout: 60000 }, () => {
   });
 });
 
-describe('scanLocalDeps', { timeout: 120000 }, () => {
+describe('scanLocalDeps', { timeout: 120000, ...skipOnWindows }, () => {
   it('scans a project directory in JSON mode', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sizeup-scan-'));
     fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({

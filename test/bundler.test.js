@@ -86,24 +86,28 @@ describe('resolveExport', () => {
 });
 
 describe('safePkgResolve', () => {
+  // Use path.resolve to get platform-correct absolute paths
+  const pkgDir = path.resolve('/pkg');
+  const deepPkgDir = path.resolve('/a/b/pkg');
+
   it('resolves path within package', () => {
-    const result = safePkgResolve('/pkg', './index.js');
-    assert.equal(result, path.resolve('/pkg', './index.js'));
+    const result = safePkgResolve(pkgDir, './index.js');
+    assert.equal(result, path.resolve(pkgDir, './index.js'));
   });
 
   it('rejects path traversal', () => {
-    const result = safePkgResolve('/pkg', '../../../etc/passwd');
+    const result = safePkgResolve(pkgDir, '../../../etc/passwd');
     assert.equal(result, null);
   });
 
   it('returns null when resolved escapes pkgDir', () => {
-    const result = safePkgResolve('/a/b/pkg', '../../outside.js');
+    const result = safePkgResolve(deepPkgDir, '../../outside.js');
     assert.equal(result, null);
   });
 
   it('allows path equal to pkgDir', () => {
-    const result = safePkgResolve('/pkg', '.');
-    assert.equal(result, path.resolve('/pkg'));
+    const result = safePkgResolve(pkgDir, '.');
+    assert.equal(result, path.resolve(pkgDir));
   });
 });
 

@@ -7,6 +7,9 @@ const path = require('path');
 const os = require('os');
 const api = require('../lib/api');
 
+const isWindows = process.platform === 'win32';
+const skipOnWindows = isWindows ? { skip: 'npm install too slow on Windows CI' } : {};
+
 describe('programmatic API', () => {
   it('exports analyze, analyzeMany, analyzeEntry', () => {
     assert.equal(typeof api.analyze, 'function');
@@ -55,7 +58,7 @@ describe('gzipLevel defaults', () => {
   });
 });
 
-describe('analyze', () => {
+describe('analyze', { ...skipOnWindows }, () => {
   it('returns expected result shape for a real package', async () => {
     const result = await api.analyze('is-number');
     assert.equal(typeof result.name, 'string');

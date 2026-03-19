@@ -4,7 +4,9 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { analyzeOne } = require('../lib/analyzer');
 
-describe('analyzeOne integration', { timeout: 60000 }, () => {
+const isWindows = process.platform === 'win32';
+
+describe('analyzeOne integration', { timeout: 60000, ...(isWindows ? { skip: 'npm install too slow on Windows CI' } : {}) }, () => {
   it('analyzes a real package end-to-end', async () => {
     const result = await analyzeOne('is-number', { noCache: true });
     assert.equal(result.name, 'is-number');

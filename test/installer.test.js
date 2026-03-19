@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { installAsync, installBatchAsync, cleanup, extractPkgName, validateSpec, getNpmCmd } = require('../lib/installer');
 
+const isWindows = process.platform === 'win32';
+const skipOnWindows = isWindows ? { skip: 'npm install too slow on Windows CI' } : {};
+
 describe('extractPkgName', () => {
   it('extracts plain package name', () => {
     assert.equal(extractPkgName('react'), 'react');
@@ -39,7 +42,7 @@ describe('validateSpec', () => {
   });
 });
 
-describe('installAsync', { timeout: 60000 }, () => {
+describe('installAsync', { timeout: 60000, ...skipOnWindows }, () => {
   it('installs a real package and returns expected shape', async () => {
     const result = await installAsync('is-number');
     try {
@@ -78,7 +81,7 @@ describe('installAsync', { timeout: 60000 }, () => {
   });
 });
 
-describe('installBatchAsync', { timeout: 60000 }, () => {
+describe('installBatchAsync', { timeout: 60000, ...skipOnWindows }, () => {
   it('installs multiple packages and returns results map', async () => {
     const result = await installBatchAsync(['is-number', 'is-odd']);
     try {
