@@ -20,8 +20,8 @@ describe('resolveExport', () => {
     assert.equal(resolveExport('./index.d.mts'), null);
   });
 
-  it('filters .css files', () => {
-    assert.equal(resolveExport('./style.css'), null);
+  it('resolves .css files', () => {
+    assert.equal(resolveExport('./style.css'), './style.css');
   });
 
   it('filters .scss files', () => {
@@ -36,8 +36,8 @@ describe('resolveExport', () => {
     assert.equal(resolveExport(['./index.d.ts', './index.js']), './index.js');
   });
 
-  it('returns null for array of all filtered items', () => {
-    assert.equal(resolveExport(['./index.d.ts', './style.css']), null);
+  it('resolves .css from array of mixed items', () => {
+    assert.equal(resolveExport(['./index.d.ts', './style.css']), './style.css');
   });
 
   it('resolves "." key in object', () => {
